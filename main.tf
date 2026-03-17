@@ -1,121 +1,104 @@
 ################################################################################
-# Transit Gateway
-# Creates or references an existing Transit Gateway
+# Example: Transit Gateway with RAM Sharing
 ################################################################################
 
-resource "aws_ec2_transit_gateway" "this" {
-  count = local.create_tgw ? 1 : 0
+# Basic Transit Gateway (single region, no sharing)
+module "transit_gateway_basic" {
+  source = "../"
 
-  amazon_side_asn                 = var.amazon_side_asn
-  auto_accept_shared_attachments  = var.auto_accept_shared_attachments
-  default_route_table_association = var.default_route_table_association
-  default_route_table_propagation = var.default_route_table_propagation
-  dns_support                     = var.dns_support
-  vpn_ecmp_support                = var.vpn_ecmp_support
-  multicast_support               = var.multicast_support
+  name        = "myorg-prod"
+  environment = "prod"
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name   = "${var.name}-${local.short_region}-tgw"
-      Region = "primary"
-    }
-  )
+  # Create a new Transit Gateway
+  create_transit_gateway = true
+  amazon_side_asn        = 64512
+
+  # Attach to hub VPC
+  vpc_id     = "vpc-0123456789abcdef0"
+  subnet_ids = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+
+  tags = {
+    Project = "network-hub"
+  }
 }
 
-resource "aws_ec2_transit_gateway_route_table" "hub" {
-  transit_gateway_id = aws_ec2_transit_gateway.this[0].id
+# Transit Gateway with RAM sharing to specific OUs
+module "transit_gateway_shared" {
+  source = "../"
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name   = "${var.name}-${local.short_region}-hub-tgw-rt"
-      Region = "primary"
-    }
-  )
+  name        = "myorg-prod"
+  environment = "prod"
+
+  # Create a new Transit Gateway
+  create_transit_gateway = true
+  amazon_side_asn        = 64513
+
+  # Attach to hub VPC
+  vpc_id                 = "vpc-0123456789abcdef0"
+  subnet_ids             = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+  appliance_mode_support = "enable"
+
+  # Share with specific OUs in the organization
+  share_transit_gateway = true
+  ram_principals = [
+    "arn:aws:organizations::123456789012:ou/o-abc123/ou-workloads-prod",
+    "arn:aws:organizations::123456789012:ou/o-abc123/ou-shared-services",
+  ]
+
+  tags = {
+    Project = "network-hub"
+  }
 }
 
-resource "aws_ec2_transit_gateway_route_table" "spoke" {
-  transit_gateway_id = aws_ec2_transit_gateway.this[0].id
+# Transit Gateway with DR region
+module "transit_gateway_dr" {
+  source = "../"
 
-  tags = merge(
-    local.common_tags,
-    {
-      Name   = "${var.name}-${local.short_region}-spoke-tgw-rt"
-      Region = "primary"
-    }
-  )
+  name             = "myorg-prod"
+  environment      = "prod"
+  primary_region   = "ap-southeast-2"
+  secondary_region = "ap-southeast-4"
+
+  # Create a new Transit Gateway
+  create_transit_gateway = true
+  amazon_side_asn        = 64514
+
+  # Primary region - attach to hub VPC
+  vpc_id     = "vpc-0123456789abcdef0"
+  subnet_ids = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+
+  # Enable DR region
+  dr_enabled    = true
+  dr_vpc_id     = "vpc-0fedcba9876543210"
+  dr_subnet_ids = ["subnet-ddd", "subnet-eee", "subnet-fff"]
+
+  # Share both primary and DR TGWs with the same OUs
+  share_transit_gateway = true
+  ram_principals = [
+    "arn:aws:organizations::123456789012:ou/o-abc123/ou-workloads-prod",
+  ]
+
+  tags = {
+    Project = "network-hub"
+  }
 }
 
-resource "aws_ec2_transit_gateway_route_table_association" "hub" {
-  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.this.id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.hub.id
+# Attach to an existing Transit Gateway (no creation)
+module "transit_gateway_existing" {
+  source = "../"
+
+  name        = "myorg-nonprod"
+  environment = "nonprod"
+
+  # Use existing Transit Gateway
+  create_transit_gateway = false
+  transit_gateway_id     = "tgw-0123456789abcdef0"
+
+  # Attach to hub VPC
+  vpc_id     = "vpc-0abcdef1234567890"
+  subnet_ids = ["subnet-111", "subnet-222", "subnet-333"]
+
+  tags = {
+    Project = "network-hub"
+  }
 }
-
-resource "aws_ec2_transit_gateway_route" "spoke_default" {
-  destination_cidr_block         = "0.0.0.0/0"
-  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.this.id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke.id
-}
-
-################################################################################
-# Transit Gateway VPC Attachment Hub 
-################################################################################
-
-resource "aws_ec2_transit_gateway_vpc_attachment" "this" {
-  transit_gateway_id = local.transit_gateway_id
-  vpc_id             = var.vpc_id
-  subnet_ids         = var.subnet_ids
-
-  appliance_mode_support                          = var.appliance_mode_support
-  transit_gateway_default_route_table_association = false
-  transit_gateway_default_route_table_propagation = false
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name   = "${var.name}-vpc-${local.short_region}-tgw-attachment"
-      Region = "primary"
-    }
-  )
-}
-
-################################################################################
-# RAM Resource Share
-# Shares the Transit Gateway with specified OUs or accounts
-################################################################################
-
-resource "aws_ram_resource_share" "tgw" {
-  count = var.share_transit_gateway ? 1 : 0
-
-  name                      = "${var.name}-${local.short_region}-tgw-share"
-  allow_external_principals = var.ram_allow_external_principals
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name   = "${var.name}-${local.short_region}-tgw-share"
-      Region = "primary"
-    }
-  )
-}
-
-resource "aws_ram_resource_association" "tgw" {
-  count = var.share_transit_gateway ? 1 : 0
-
-  resource_arn       = local.create_tgw ? aws_ec2_transit_gateway.this[0].arn : "arn:aws:ec2:${var.primary_region}:${data.aws_caller_identity.current.account_id}:transit-gateway/${var.transit_gateway_id}"
-  resource_share_arn = aws_ram_resource_share.tgw[0].arn
-}
-
-resource "aws_ram_principal_association" "tgw" {
-  count = var.share_transit_gateway ? length(var.ram_principals) : 0
-
-  principal          = var.ram_principals[count.index]
-  resource_share_arn = aws_ram_resource_share.tgw[0].arn
-}
-
-################################################################################
-# Data Sources
-################################################################################
-
-data "aws_caller_identity" "current" {}
